@@ -1,8 +1,8 @@
 name: Visit Websites
-
 on:
   schedule:
-    - cron: '*/5 * * * *'  # At every 5th minute
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   visit-websites:
