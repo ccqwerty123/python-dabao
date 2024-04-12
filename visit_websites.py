@@ -3,7 +3,7 @@ import requests
 # 假设文本文件名为 urls.txt，并位于仓库根目录
 URLS_FILE = 'urls.txt'
 HEADERS = {
-    'User-Agent': 'Your User Agent'  # 替换为你的User-Agent
+    'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.6045.160 Safari/537.36'  # 替换为你的User-Agent
 }
 
 def visit_urls(urls_file):
