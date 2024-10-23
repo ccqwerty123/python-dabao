@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # 添加写入权限
+  contents: write
 
 jobs:
   build:
@@ -14,7 +14,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v2
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}  # 使用 GITHUB_TOKEN
+        token: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Check source files
       id: check_files
@@ -54,7 +54,7 @@ jobs:
       if: success()
       uses: actions/setup-python@v2
       with:
-        python-version: '3.10'
+        python-version: '3.8'
       
     - name: Install tools
       if: success()
@@ -110,8 +110,10 @@ jobs:
           pyinstaller --onefile `
                      --noconsole `
                      --clean `
+                     --runtime-hook "py/runtime_hook.py" `
                      --name=$py_name `
                      --distpath=exe/original `
+                     --add-binary "C:/Windows/System32/api-ms-win-core-path-l1-1-0.dll;." `
                      "py/$py_name.py"
           
           # 构建压缩版本
@@ -121,6 +123,8 @@ jobs:
                      --clean `
                      --upx-dir=. `
                      --strip `
+                     --runtime-hook "py/runtime_hook.py" `
+                     --add-binary "C:/Windows/System32/api-ms-win-core-path-l1-1-0.dll;." `
                      --exclude-module tkinter `
                      --exclude-module unittest `
                      --exclude-module email `
