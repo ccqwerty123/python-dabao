@@ -60,7 +60,7 @@ jobs:
       if: success()
       run: |
         python -m pip install --upgrade pip
-        pip install pipreqs pyinstaller
+        pip install pipreqs pyinstaller delvewheel
       shell: pwsh
 
     - name: Install UPX
@@ -113,7 +113,7 @@ jobs:
                      --runtime-hook "py/runtime_hook.py" `
                      --name=$py_name `
                      --distpath=exe/original `
-                     --add-binary "C:/Windows/System32/api-ms-win-core-path-l1-1-0.dll;." `
+                     --collect-all pandas `
                      "py/$py_name.py"
           
           # 构建压缩版本
@@ -124,7 +124,7 @@ jobs:
                      --upx-dir=. `
                      --strip `
                      --runtime-hook "py/runtime_hook.py" `
-                     --add-binary "C:/Windows/System32/api-ms-win-core-path-l1-1-0.dll;." `
+                     --collect-all pandas `
                      --exclude-module tkinter `
                      --exclude-module unittest `
                      --exclude-module email `
