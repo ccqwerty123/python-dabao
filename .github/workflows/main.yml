@@ -1,24 +1,160 @@
-name: Visit Websites
+name: Build Windows EXE
+
 on:
-  schedule:
-    - cron: '*/3 * * * *'
   workflow_dispatch:
 
 jobs:
-  visit-websites:
-    runs-on: ubuntu-latest
-
+  build:
+    runs-on: windows-latest
+    
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v2
-
+      
+    - name: Check source files
+      id: check_files
+      run: |
+        # 检查目录结构
+        $dirs = @("py", "exe", "exe/original", "exe/compressed")
+        foreach ($dir in $dirs) {
+          if (-not(Test-Path $dir)) {
+            mkdir $dir
+          }
+        }
+        
+        # 检查是否需要更新
+        $need_build = $false
+        Get-ChildItem "py/*.py" | ForEach-Object {
+          $py_name = $_.BaseName
+          $py_file = $_.FullName
+          $exe_orig = "exe/original/$py_name.exe"
+          $exe_comp = "exe/compressed/$py_name.exe"
+          
+          # 如果任一exe不存在或py文件更新过,则需要构建
+          if ((-not(Test-Path $exe_orig) -or -not(Test-Path $exe_comp)) -or 
+              (Get-Item $py_file).LastWriteTime -gt (Get-Item $exe_orig).LastWriteTime) {
+            echo "需要构建: $py_name"
+            echo "$py_name" >> to_build.txt
+            $need_build = $true
+          }
+        }
+        
+        if (-not $need_build) {
+          echo "所有exe都是最新的,不需要构建"
+          exit 0
+        }
+      shell: pwsh
+    
     - name: Set up Python
+      if: success()
       uses: actions/setup-python@v2
       with:
-        python-version: '3.8'
+        python-version: '3.10'
+      
+    - name: Install tools
+      if: success()
+      run: |
+        python -m pip install --upgrade pip
+        pip install pipreqs pyinstaller
+      shell: pwsh
 
+    - name: Install UPX
+      if: success()
+      run: |
+        $url = "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip"
+        Invoke-WebRequest -Uri $url -OutFile upx.zip
+        Expand-Archive upx.zip -DestinationPath .
+        Move-Item upx-*/upx.exe .
+      shell: pwsh
+      
+    - name: Generate requirements
+      if: success()
+      run: |
+        try {
+          pipreqs py --force
+          if (Test-Path "requirements.txt") {
+            echo "依赖列表:"
+            type requirements.txt
+          }
+        } catch {
+          echo "错误: $_"
+          exit 1
+        }
+      shell: pwsh
+    
     - name: Install dependencies
-      run: pip install requests
+      if: success()
+      run: |
+        if (Test-Path "requirements.txt") {
+          pip install -r requirements.txt
+        }
+        if (Test-Path "requirements-base.txt") {
+          pip install -r requirements-base.txt
+        }
+      shell: pwsh
+    
+    - name: Build EXEs
+      if: success()
+      run: |
+        Get-Content to_build.txt | ForEach-Object {
+          $py_name = $_
+          echo "正在构建: $py_name"
+          
+          # 构建原始版本
+          echo "构建原始版本..."
+          pyinstaller --onefile `
+                     --noconsole `
+                     --clean `
+                     --name=$py_name `
+                     --distpath=exe/original `
+                     "py/$py_name.py"
+          
+          # 构建压缩版本
+          echo "构建压缩版本..."
+          pyinstaller --onefile `
+                     --noconsole `
+                     --clean `
+                     --upx-dir=. `
+                     --strip `
+                     --exclude-module tkinter `
+                     --exclude-module unittest `
+                     --exclude-module email `
+                     --exclude-module html `
+                     --exclude-module http `
+                     --exclude-module xml `
+                     --exclude-module pydoc `
+                     --name=$py_name `
+                     --distpath=exe/compressed `
+                     "py/$py_name.py"
+                     
+          # 检查文件是否生成成功
+          $exe_orig = "exe/original/$py_name.exe"
+          $exe_comp = "exe/compressed/$py_name.exe"
+          
+          if (-not(Test-Path $exe_orig)) {
+            echo "错误: 原始版本构建失败"
+            exit 1
+          }
+          if (-not(Test-Path $exe_comp)) {
+            echo "错误: 压缩版本构建失败"
+            exit 1
+          }
+          
+          # 输出文件大小对比
+          $size_orig = (Get-Item $exe_orig).length/1MB
+          $size_comp = (Get-Item $exe_comp).length/1MB
+          echo "文件大小对比:"
+          echo "原始版本: $([math]::Round($size_orig, 2)) MB"
+          echo "压缩版本: $([math]::Round($size_comp, 2)) MB"
+          echo "压缩率: $([math]::Round(($size_orig-$size_comp)/$size_orig*100, 1))%"
+        }
+      shell: pwsh
 
-    - name: Run Python script
-      run: python visit_websites.py
+    - name: Upload artifacts
+      if: success()
+      uses: actions/upload-artifact@v2
+      with:
+        name: windows-exes
+        path: |
+          exe/original/*.exe
+          exe/compressed/*.exe
