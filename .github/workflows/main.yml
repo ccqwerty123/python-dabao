@@ -150,11 +150,12 @@ jobs:
         }
       shell: pwsh
 
-    - name: Upload artifacts
-      if: success()
-      uses: actions/upload-artifact@v2
-      with:
-        name: windows-exes
-        path: |
-          exe/original/*.exe
-          exe/compressed/*.exe
+    - name: Commit EXE files
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add exe/original/*.exe
+        git add exe/compressed/*.exe
+        git commit -m "Update EXE files" -a || echo "No changes to commit"
+        git push
+      shell: pwsh
