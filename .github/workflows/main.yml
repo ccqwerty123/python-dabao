@@ -1,86 +1,127 @@
-- name: Build EXEs
-      if: steps.check_files.outputs.need_build == 'true'
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'py/**/*.py'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Create directories
       run: |
-        $env:PYTHONPATH = "c:\hostedtoolcache\windows\python\3.8\x64"
-        
-        Get-Content to_build.txt | ForEach-Object {
-          $py_name = $_.Trim()
-          Write-Host "Building: $py_name"
-          
-          # 使用 here-string 时需要注意缩进和换行
-          $spec_content = @'
-# -*- mode: python ; coding: utf-8 -*-
-block_cipher = None
+        New-Item -ItemType Directory -Force -Path py
+        New-Item -ItemType Directory -Force -Path exe/original
+        New-Item -ItemType Directory -Force -Path exe/compressed
+      shell: pwsh
+      
+    - name: Check for Python files
+      id: check_py
+      run: |
+        if (Test-Path "py/*.py") {
+          Write-Host "Found Python files to process"
+          echo "FOUND_PY=true" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Host "No Python files found"
+          echo "FOUND_PY=false" >> $env:GITHUB_OUTPUT
+        }
+      shell: pwsh
 
-a = Analysis(
-    ["py/{0}.py"],
-    pathex=["py"],
-    binaries=[],
-    datas=[],
-    hiddenimports=["win32api", "win32con"],
-    hookspath=[],
-    runtime_hooks=[],
-    excludes=["tkinter", "unittest", "email", "html", "http", "xml", "pydoc"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=True,
-    cipher=block_cipher,
-    noarchive=False
-)
-
-pyz = PYZ(
-    a.pure,
-    a.zipped_data,
-    cipher=block_cipher
-)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name="{0}",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False
-)
-'@ -f $py_name
+    - name: Set up Python
+      if: steps.check_py.outputs.FOUND_PY == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.8'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      if: steps.check_py.outputs.FOUND_PY == 'true'
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller==5.13.2 pywin32 pefile
+      shell: pwsh
+    
+    - name: Download UPX
+      if: steps.check_py.outputs.FOUND_PY == 'true'
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile upx.zip
+        Expand-Archive upx.zip -DestinationPath .
+        Move-Item upx-*/upx.exe . -Force
+        Remove-Item upx.zip -Force
+        Remove-Item upx-* -Recurse -Force
+      shell: pwsh
+    
+    - name: Build EXEs
+      if: steps.check_py.outputs.FOUND_PY == 'true'
+      run: |
+        Get-ChildItem "py/*.py" | ForEach-Object {
+          $pyFile = $_.Name
+          $baseName = $_.BaseName
+          Write-Host "Processing $pyFile"
           
-          $spec_content | Out-File -Encoding UTF8 "$py_name.spec"
+          # Build original version
+          Write-Host "Building original version..."
+          pyinstaller --clean `
+                     --noconfirm `
+                     --onefile `
+                     --name "$baseName" `
+                     --distpath "exe/original" `
+                     --workpath "build/original" `
+                     --specpath "specs" `
+                     "py/$pyFile"
           
-          try {
-            # 构建原始版本
-            Write-Host "Building original version..."
-            pyinstaller --clean "$py_name.spec" --distpath="exe/original"
+          # Build compressed version
+          Write-Host "Building compressed version..."
+          pyinstaller --clean `
+                     --noconfirm `
+                     --onefile `
+                     --upx-dir "." `
+                     --name "$baseName" `
+                     --distpath "exe/compressed" `
+                     --workpath "build/compressed" `
+                     --specpath "specs" `
+                     "py/$pyFile"
+          
+          # Check if builds were successful
+          $origExe = "exe/original/$baseName.exe"
+          $compExe = "exe/compressed/$baseName.exe"
+          
+          if (Test-Path $origExe -and Test-Path $compExe) {
+            $origSize = (Get-Item $origExe).Length/1MB
+            $compSize = (Get-Item $compExe).Length/1MB
+            $ratio = 100 - ($compSize/$origSize*100)
             
-            # 构建压缩版本
-            Write-Host "Building compressed version..."
-            pyinstaller --clean "$py_name.spec" --upx-dir="." --distpath="exe/compressed"
-            
-            # 验证构建结果
-            $exe_orig = "exe/original/$py_name.exe"
-            $exe_comp = "exe/compressed/$py_name.exe"
-            
-            if (-not(Test-Path $exe_orig) -or -not(Test-Path $exe_comp)) {
-              throw "Build failed: EXE files not generated"
-            }
-            
-            # 输出文件大小对比
-            $size_orig = (Get-Item $exe_orig).length/1MB
-            $size_comp = (Get-Item $exe_comp).length/1MB
-            Write-Host "File size comparison:"
-            Write-Host "Original: $([math]::Round($size_orig, 2)) MB"
-            Write-Host "Compressed: $([math]::Round($size_comp, 2)) MB"
-            Write-Host "Compression ratio: $([math]::Round(($size_orig-$size_comp)/$size_orig*100, 1))%"
-            
-          } catch {
-            Write-Host "Error building $py_name : $_"
+            Write-Host "Build successful for $baseName"
+            Write-Host "Original size: $([math]::Round($origSize, 2)) MB"
+            Write-Host "Compressed size: $([math]::Round($compSize, 2)) MB"
+            Write-Host "Compression ratio: $([math]::Round($ratio, 1))%"
+          } else {
+            Write-Error "Build failed for $baseName"
             exit 1
           }
+        }
+      shell: pwsh
+    
+    - name: Commit changes
+      if: steps.check_py.outputs.FOUND_PY == 'true'
+      run: |
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add exe/original/*.exe
+        git add exe/compressed/*.exe
+        if (git status --porcelain) {
+          git commit -m "Update EXE files [skip ci]"
+          git push
+        } else {
+          Write-Host "No changes to commit"
         }
       shell: pwsh
