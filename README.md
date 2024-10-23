@@ -1,4 +1,5 @@
-这是一个 GitHub Actions 工作流配置文件，用于自动构建 Windows 可执行文件（EXE）。以下是详细说明：
+Python 脚本自动打包 Windows EXE
+这是一个使用 GitHub Actions 自动构建 Windows 可执行文件（EXE）的工作流配置。
 触发条件
 
 手动触发（workflow_dispatch）
@@ -41,4 +42,22 @@ Copyrepository/
 
 将生成的 EXE 文件提交到仓库
 
+使用说明
+
+将 Python 脚本放入 py 目录
+GitHub Actions 会自动检测变化并构建 EXE
+构建完成后可在 exe 目录下找到生成的文件：
+
+exe/original/ 包含原始版本
+exe/compressed/ 包含压缩版本
+
+
+
 这个工作流程适合需要定期将 Python 脚本打包成 Windows 可执行文件的项目，特别是当文件大小是一个考虑因素时。
+注意事项
+
+使用 Python 3.8 环境
+依赖 PyInstaller 5.13.2
+使用 UPX 4.2.1 进行压缩
+自动跳过 runtime_hook.py 文件的构建
+ CopyRetryClaude does not have the ability to run the code it generates yet.
