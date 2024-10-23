@@ -2,6 +2,9 @@ name: Build Windows EXE
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'py/**/*.py'  # 当py目录下的Python文件变更时触发
 
 permissions:
   contents: write
@@ -12,84 +15,107 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         
     - name: Check source files
       id: check_files
       run: |
-        # 检查目录结构
+        # 检查必要目录
         $dirs = @("py", "exe", "exe/original", "exe/compressed")
         foreach ($dir in $dirs) {
           if (-not(Test-Path $dir)) {
-            mkdir $dir
+            New-Item -ItemType Directory -Path $dir -Force
+            Write-Host "Created directory: $dir"
           }
         }
+        
+        # 创建构建列表文件
+        $build_list = @()
         
         # 检查是否需要更新
-        $need_build = $false
-        Get-ChildItem "py/*.py" | ForEach-Object {
-          $py_name = $_.BaseName
-          $py_file = $_.FullName
-          $exe_orig = "exe/original/$py_name.exe"
-          $exe_comp = "exe/compressed/$py_name.exe"
-          
-          # 如果任一exe不存在或py文件更新过,则需要构建
-          if ((-not(Test-Path $exe_orig) -or -not(Test-Path $exe_comp)) -or 
-              (Get-Item $py_file).LastWriteTime -gt (Get-Item $exe_orig).LastWriteTime) {
-            echo "需要构建: $py_name"
-            echo "$py_name" >> to_build.txt
-            $need_build = $true
+        if (Test-Path "py/*.py") {
+          Get-ChildItem "py/*.py" | ForEach-Object {
+            $py_name = $_.BaseName
+            $py_file = $_.FullName
+            $exe_orig = "exe/original/$py_name.exe"
+            $exe_comp = "exe/compressed/$py_name.exe"
+            
+            if ((-not(Test-Path $exe_orig) -or -not(Test-Path $exe_comp)) -or 
+                ((Test-Path $exe_orig) -and (Get-Item $py_file).LastWriteTime -gt (Get-Item $exe_orig).LastWriteTime)) {
+              Write-Host "Need to build: $py_name"
+              $build_list += $py_name
+            }
           }
+        } else {
+          Write-Host "No Python files found in py directory"
+          exit 0
         }
         
-        if (-not $need_build) {
-          echo "所有exe都是最新的,不需要构建"
+        if ($build_list.Count -eq 0) {
+          Write-Host "All EXE files are up to date"
+          echo "need_build=false" >> $env:GITHUB_OUTPUT
           exit 0
+        } else {
+          $build_list | Out-File -FilePath "to_build.txt"
+          echo "need_build=true" >> $env:GITHUB_OUTPUT
         }
       shell: pwsh
     
     - name: Set up Python
-      if: success()
-      uses: actions/setup-python@v2
+      if: steps.check_files.outputs.need_build == 'true'
+      uses: actions/setup-python@v5
       with:
         python-version: '3.8'
+        cache: 'pip'
       
     - name: Install tools
-      if: success()
+      if: steps.check_files.outputs.need_build == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install pipreqs pyinstaller==5.13.2 pywin32 pefile
       shell: pwsh
 
     - name: Install UPX
-      if: success()
+      if: steps.check_files.outputs.need_build == 'true'
       run: |
-        $url = "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip"
-        Invoke-WebRequest -Uri $url -OutFile upx.zip
-        Expand-Archive upx.zip -DestinationPath .
-        Move-Item upx-*/upx.exe .
-      shell: pwsh
-      
-    - name: Generate requirements
-      if: success()
-      run: |
+        $upx_version = "4.2.1"
+        $url = "https://github.com/upx/upx/releases/download/v${upx_version}/upx-${upx_version}-win64.zip"
+        
         try {
-          pipreqs py --force
-          if (Test-Path "requirements.txt") {
-            echo "依赖列表:"
-            type requirements.txt
+          Invoke-WebRequest -Uri $url -OutFile upx.zip
+          Expand-Archive upx.zip -DestinationPath . -Force
+          Move-Item upx-*/upx.exe . -Force
+          Remove-Item upx.zip
+          Remove-Item upx-* -Recurse
+          
+          # 验证UPX安装
+          if (-not(Test-Path "upx.exe")) {
+            throw "UPX installation failed"
           }
         } catch {
-          echo "错误: $_"
+          Write-Host "Error installing UPX: $_"
           exit 1
         }
       shell: pwsh
-    
-    - name: Install dependencies
-      if: success()
+      
+    - name: Generate and install requirements
+      if: steps.check_files.outputs.need_build == 'true'
       run: |
+        # 生成requirements.txt
+        try {
+          pipreqs py --force
+          if (Test-Path "requirements.txt") {
+            Write-Host "Dependencies list:"
+            Get-Content requirements.txt
+          }
+        } catch {
+          Write-Host "Error generating requirements: $_"
+          exit 1
+        }
+        
+        # 安装依赖
         if (Test-Path "requirements.txt") {
           pip install -r requirements.txt
         }
@@ -99,32 +125,25 @@ jobs:
       shell: pwsh
     
     - name: Build EXEs
-      if: success()
+      if: steps.check_files.outputs.need_build == 'true'
       run: |
+        $env:PYTHONPATH = "c:\hostedtoolcache\windows\python\3.8\x64"
+        
         Get-Content to_build.txt | ForEach-Object {
-          $py_name = $_
-          echo "正在构建: $py_name"
+          $py_name = $_.Trim()
+          Write-Host "Building: $py_name"
           
-          # 创建.spec文件
-          echo "生成spec文件..."
-          @"
+          $spec_content = @"
 # -*- mode: python ; coding: utf-8 -*-
-import os
-import sys
-
 block_cipher = None
-
-added_files = [
-    ('$env:PYTHONPATH/python38.dll', '.'),
-]
 
 a = Analysis(['py/$py_name.py'],
              pathex=['py'],
              binaries=[],
-             datas=added_files,
+             datas=[],
              hiddenimports=['win32api', 'win32con'],
              hookspath=[],
-             runtime_hooks=['py/runtime_hook.py'],
+             runtime_hooks=[],
              excludes=['tkinter', 'unittest', 'email', 'html', 'http', 'xml', 'pydoc'],
              win_no_prefer_redirects=False,
              win_private_assemblies=True,
@@ -147,58 +166,54 @@ exe = EXE(pyz,
           upx=True,
           upx_exclude=[],
           runtime_tmpdir=None,
-          console=False,
-          disable_windowed_traceback=False,
-          target_arch=None,
-          codesign_identity=None,
-          entitlements_file=None)
-"@ | Out-File -Encoding UTF8 "$py_name.spec"
+          console=False)
+"@
           
-          # 构建原始版本
-          echo "构建原始版本..."
-          $env:PYTHONPATH = "c:\hostedtoolcache\windows\python\3.8\x64"
-          pyinstaller --clean `
-                     "$py_name.spec" `
-                     --distpath=exe/original
+          $spec_content | Out-File -Encoding UTF8 "$py_name.spec"
           
-          # 构建压缩版本
-          echo "构建压缩版本..."
-          pyinstaller --clean `
-                     "$py_name.spec" `
-                     --upx-dir=. `
-                     --distpath=exe/compressed
-                     
-          # 检查文件是否生成成功
-          $exe_orig = "exe/original/$py_name.exe"
-          $exe_comp = "exe/compressed/$py_name.exe"
-          
-          if (-not(Test-Path $exe_orig)) {
-            echo "错误: 原始版本构建失败"
+          try {
+            # 构建原始版本
+            Write-Host "Building original version..."
+            pyinstaller --clean "$py_name.spec" --distpath="exe/original"
+            
+            # 构建压缩版本
+            Write-Host "Building compressed version..."
+            pyinstaller --clean "$py_name.spec" --upx-dir="." --distpath="exe/compressed"
+            
+            # 验证构建结果
+            $exe_orig = "exe/original/$py_name.exe"
+            $exe_comp = "exe/compressed/$py_name.exe"
+            
+            if (-not(Test-Path $exe_orig) -or -not(Test-Path $exe_comp)) {
+              throw "Build failed: EXE files not generated"
+            }
+            
+            # 输出文件大小对比
+            $size_orig = (Get-Item $exe_orig).length/1MB
+            $size_comp = (Get-Item $exe_comp).length/1MB
+            Write-Host "File size comparison:"
+            Write-Host "Original: $([math]::Round($size_orig, 2)) MB"
+            Write-Host "Compressed: $([math]::Round($size_comp, 2)) MB"
+            Write-Host "Compression ratio: $([math]::Round(($size_orig-$size_comp)/$size_orig*100, 1))%"
+            
+          } catch {
+            Write-Host "Error building $py_name : $_"
             exit 1
           }
-          if (-not(Test-Path $exe_comp)) {
-            echo "错误: 压缩版本构建失败"
-            exit 1
-          }
-          
-          # 输出文件大小对比
-          $size_orig = (Get-Item $exe_orig).length/1MB
-          $size_comp = (Get-Item $exe_comp).length/1MB
-          echo "文件大小对比:"
-          echo "原始版本: $([math]::Round($size_orig, 2)) MB"
-          echo "压缩版本: $([math]::Round($size_comp, 2)) MB"
-          echo "压缩率: $([math]::Round(($size_orig-$size_comp)/$size_orig*100, 1))%"
         }
       shell: pwsh
 
     - name: Commit EXE files
+      if: steps.check_files.outputs.need_build == 'true'
       run: |
-        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         git add exe/original/*.exe
         git add exe/compressed/*.exe
-        git commit -m "Update EXE files" -a || echo "No changes to commit"
-        git push
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if (git status --porcelain) {
+          git commit -m "Update EXE files [skip ci]"
+          git push
+        } else {
+          Write-Host "No changes to commit"
+        }
       shell: pwsh
