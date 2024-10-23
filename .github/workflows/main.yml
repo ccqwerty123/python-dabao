@@ -16,152 +16,153 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: Create directories
-      run: |
-        New-Item -ItemType Directory -Force -Path py
-        New-Item -ItemType Directory -Force -Path exe/original
-        New-Item -ItemType Directory -Force -Path exe/compressed
-      shell: pwsh
-      
-    - name: Check for Python files
-      id: check_py
-      run: |
-        if (Test-Path "py/*.py") {
-          Write-Host "Found Python files to process"
-          echo "FOUND_PY=true" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "No Python files found"
-          echo "FOUND_PY=false" >> $env:GITHUB_OUTPUT
-        }
-      shell: pwsh
 
     - name: Set up Python
-      if: steps.check_py.outputs.FOUND_PY == 'true'
       uses: actions/setup-python@v5
       with:
         python-version: '3.8'
 
-    - name: Install base tools
-      if: steps.check_py.outputs.FOUND_PY == 'true'
-      run: |
-        python -m pip install --upgrade pip
-        pip install pipreqs pyinstaller==5.13.2 pywin32 pefile
-      shell: pwsh
-
-    - name: Generate requirements
-      if: steps.check_py.outputs.FOUND_PY == 'true'
-      run: |
-        # 生成 requirements.txt
-        pipreqs py --force --encoding=utf8
-        
-        # 确保requirements.txt存在
-        if (-not(Test-Path requirements.txt)) {
-          "" | Set-Content requirements.txt
-          Write-Host "Created empty requirements.txt"
-        }
-        
-        Write-Host "Requirements file content:"
-        Get-Content requirements.txt
-      shell: pwsh
-
-    - name: Cache pip packages
-      if: steps.check_py.outputs.FOUND_PY == 'true'
-      uses: actions/cache@v3
+    - name: Setup dependencies cache
+      uses: actions/cache@v4
       with:
         path: ~\AppData\Local\pip\Cache
-        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    
-    - name: Install project dependencies
-      if: steps.check_py.outputs.FOUND_PY == 'true'
+
+    - name: Install base packages
       run: |
-        if (Test-Path requirements.txt) {
-          if ((Get-Content requirements.txt).Length -gt 0) {
-            pip install -r requirements.txt
-          } else {
-            Write-Host "No project dependencies to install"
-          }
-        }
-        
-        if (Test-Path requirements-base.txt) {
-          pip install -r requirements-base.txt
-        }
+        python -m pip install --upgrade pip
+        pip install pyinstaller==5.13.2 pywin32 pefile
       shell: pwsh
-    
-    - name: Download UPX
-      if: steps.check_py.outputs.FOUND_PY == 'true'
+
+    - name: Setup build environment
       run: |
-        Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v4.2.1/upx-4.2.1-win64.zip" -OutFile upx.zip
+        # 创建必要的目录
+        $dirs = @("py", "exe/original", "exe/compressed", "build", "specs")
+        foreach ($dir in $dirs) {
+          New-Item -ItemType Directory -Force -Path $dir
+          Write-Host "Created directory: $dir"
+        }
+
+        # 下载并设置 UPX
+        $upx_version = "4.2.1"
+        $url = "https://github.com/upx/upx/releases/download/v${upx_version}/upx-${upx_version}-win64.zip"
+        
+        Invoke-WebRequest -Uri $url -OutFile upx.zip
         Expand-Archive upx.zip -DestinationPath .
         Move-Item upx-*/upx.exe . -Force
-        Remove-Item upx.zip -Force
-        Remove-Item upx-* -Recurse -Force
+        Remove-Item upx.zip, upx-* -Recurse -Force
+        
+        if (Test-Path "upx.exe") {
+          Write-Host "UPX installed successfully"
+        } else {
+          throw "Failed to install UPX"
+        }
       shell: pwsh
-    
+      
     - name: Build EXEs
-      if: steps.check_py.outputs.FOUND_PY == 'true'
       run: |
-        Get-ChildItem "py/*.py" | ForEach-Object {
-          $pyFile = $_.Name
-          $baseName = $_.BaseName
-          Write-Host "Processing $pyFile"
+        $ErrorActionPreference = 'Stop'
+        
+        # 检查是否有Python文件
+        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue
+        if (-not $pyFiles) {
+          Write-Host "No Python files found in py directory"
+          exit 0
+        }
+        
+        foreach ($pyFile in $pyFiles) {
+          $baseName = $pyFile.BaseName
+          Write-Host "`nProcessing: $($pyFile.Name)"
           
-          # Build original version
-          Write-Host "Building original version..."
-          pyinstaller --clean `
-                     --noconfirm `
-                     --onefile `
-                     --name "$baseName" `
-                     --distpath "exe/original" `
-                     --workpath "build/original" `
-                     --specpath "specs" `
-                     "py/$pyFile"
+          $common_args = @(
+            "--clean",
+            "--noconfirm",
+            "--onefile",
+            "--noconsole",
+            "--name", $baseName,
+            "--specpath", "specs",
+            "py/$($pyFile.Name)"
+          )
           
-          # Build compressed version
-          Write-Host "Building compressed version..."
-          pyinstaller --clean `
-                     --noconfirm `
-                     --onefile `
-                     --upx-dir "." `
-                     --name "$baseName" `
-                     --distpath "exe/compressed" `
-                     --workpath "build/compressed" `
-                     --specpath "specs" `
-                     "py/$pyFile"
+          # 构建原始版本
+          Write-Host "`nBuilding original version..."
+          $orig_args = $common_args + @(
+            "--distpath", "exe/original",
+            "--workpath", "build/original"
+          )
           
-          # Check if builds were successful
+          try {
+            & pyinstaller $orig_args
+            if (-not $?) { throw "PyInstaller failed" }
+          }
+          catch {
+            Write-Error "Failed to build original version: $_"
+            exit 1
+          }
+          
+          # 构建压缩版本
+          Write-Host "`nBuilding compressed version..."
+          $comp_args = $common_args + @(
+            "--distpath", "exe/compressed",
+            "--workpath", "build/compressed",
+            "--upx-dir", "."
+          )
+          
+          try {
+            & pyinstaller $comp_args
+            if (-not $?) { throw "PyInstaller failed" }
+          }
+          catch {
+            Write-Error "Failed to build compressed version: $_"
+            exit 1
+          }
+          
+          # 验证构建结果
           $origExe = "exe/original/$baseName.exe"
           $compExe = "exe/compressed/$baseName.exe"
           
-          if (Test-Path $origExe -and Test-Path $compExe) {
-            $origSize = (Get-Item $origExe).Length/1MB
-            $compSize = (Get-Item $compExe).Length/1MB
-            $ratio = 100 - ($compSize/$origSize*100)
-            
-            Write-Host "Build successful for $baseName"
-            Write-Host "Original size: $([math]::Round($origSize, 2)) MB"
-            Write-Host "Compressed size: $([math]::Round($compSize, 2)) MB"
-            Write-Host "Compression ratio: $([math]::Round($ratio, 1))%"
-          } else {
-            Write-Error "Build failed for $baseName"
+          if (-not(Test-Path $origExe) -or -not(Test-Path $compExe)) {
+            Write-Error "Build verification failed: Missing EXE files"
             exit 1
           }
+          
+          # 输出大小对比
+          $origSize = (Get-Item $origExe).Length/1MB
+          $compSize = (Get-Item $compExe).Length/1MB
+          $ratio = 100 - ($compSize/$origSize*100)
+          
+          Write-Host "`nBuild Results for $baseName"
+          Write-Host "Original: $([math]::Round($origSize, 2)) MB"
+          Write-Host "Compressed: $([math]::Round($compSize, 2)) MB"
+          Write-Host "Compression: $([math]::Round($ratio, 1))%"
         }
       shell: pwsh
-    
-    - name: Commit changes
-      if: steps.check_py.outputs.FOUND_PY == 'true'
+
+    - name: Commit EXE files
       run: |
-        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-        git add exe/original/*.exe
-        git add exe/compressed/*.exe
-        if (git status --porcelain) {
+        # 检查是否有新的exe文件
+        $hasChanges = $false
+        
+        foreach ($dir in @("original", "compressed")) {
+          $exeFiles = Get-ChildItem "exe/$dir/*.exe" -ErrorAction SilentlyContinue
+          if ($exeFiles) {
+            $hasChanges = $true
+            break
+          }
+        }
+        
+        if ($hasChanges) {
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add exe/original/*.exe
+          git add exe/compressed/*.exe
+          
           git commit -m "Update EXE files [skip ci]"
           git push
         } else {
-          Write-Host "No changes to commit"
+          Write-Host "No new EXE files to commit"
         }
       shell: pwsh
