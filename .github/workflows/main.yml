@@ -66,7 +66,9 @@ jobs:
         $ErrorActionPreference = 'Stop'
         
         # 检查是否有Python文件
-        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue
+        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue | 
+                  Where-Object { $_.BaseName -ne "runtime_hook" }  # 排除 runtime_hook.py
+                  
         if (-not $pyFiles) {
           Write-Host "No Python files found in py directory"
           exit 0
