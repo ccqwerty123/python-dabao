@@ -40,8 +40,9 @@ repository/
 
 ## 使用说明
 1. 将 Python 脚本放入 `py` 目录
-2. GitHub Actions 会自动检测变化并构建 EXE
+2. GitHub Actions里手动运行，GitHub Actions会自动检测变化并构建 EXE
 3. 构建完成后可在 `exe` 目录下找到生成的文件：
    - `exe/original/` 包含原始版本
    - `exe/compressed/` 包含压缩版本
+   - 2024年10月24日2:10:06
 
