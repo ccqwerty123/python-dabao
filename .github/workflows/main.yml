@@ -3,6 +3,9 @@ name: Build Windows EXE
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  # 添加写入权限
+
 jobs:
   build:
     runs-on: windows-latest
@@ -10,7 +13,9 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
-      
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}  # 使用 GITHUB_TOKEN
+        
     - name: Check source files
       id: check_files
       run: |
@@ -152,10 +157,12 @@ jobs:
 
     - name: Commit EXE files
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
         git add exe/original/*.exe
         git add exe/compressed/*.exe
         git commit -m "Update EXE files" -a || echo "No changes to commit"
         git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       shell: pwsh
