@@ -186,9 +186,9 @@ jobs:
           }
           
           # Output size comparison
-          $origSize = (Get-Item $origExe).Length/1MB
-          $compSize = (Get-Item $compExe).Length/1MB
-          $ratio = 100 - ($compSize/$origSize*100)
+          $origSize = (Get-Item $origExe).Length / 1MB
+          $compSize = (Get-Item $compExe).Length / 1MB
+          $ratio = 100 - ($compSize / $origSize * 100)
           
           Write-Host "`nBuild Results for $baseName"
           Write-Host "Original: $([math]::Round($origSize, 2)) MB"
