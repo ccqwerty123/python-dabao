@@ -40,57 +40,105 @@ jobs:
       run: |
         Write-Host "Current Directory: $(Get-Location)"
         Write-Host "Files in py directory:"
-        Get-ChildItem py
+        Get-ChildItem py -Recurse
       shell: pwsh
 
-    - name: Generate new requirements.txt
+    - name: Handle requirements.txt
       run: |
-        Write-Host "Generating new requirements.txt..."
+        Write-Host "Starting requirements.txt handling..."
         
-        # Attempt to generate new_requirements.txt
-        $result = pipreqs py --force --output py/new_requirements.txt 2>&1
-        Write-Host "pipreqs output: $result"
-
-        # Check if new_requirements.txt was created
-        if (Test-Path "py/new_requirements.txt") {
-          Write-Host "Generated new requirements.txt successfully."
-          Get-Content py/new_requirements.txt
-        } else {
-          Write-Error "new_requirements.txt not found after generation."
-          exit 1
+        # 确保py目录存在
+        if (-not (Test-Path "py")) {
+            New-Item -ItemType Directory -Path "py" -Force
+            Write-Host "Created py directory"
         }
-      shell: pwsh
-
-    - name: Merge requirements.txt
-      run: |
-        if (Test-Path "py/requirements.txt") {
-          Write-Host "Merging existing requirements.txt with new requirements..."
-          # Read the existing requirements.txt
-          $existingRequirements = Get-Content py/requirements.txt
-          # Read the new requirements.txt
-          $newRequirements = Get-Content py/new_requirements.txt
-
-          # Combine and deduplicate
-          $mergedRequirements = ($existingRequirements + $newRequirements) | Select-Object -Unique
-          # Save merged results
-          $mergedRequirements | Set-Content py/requirements.txt
-        } else {
-          Write-Host "No existing requirements.txt found, using new one."
-          Move-Item py/new_requirements.txt py/requirements.txt -Force
+        
+        # 设置基础依赖列表
+        $baseRequirements = @(
+            "requests==2.31.0",
+            "urllib3==2.2.0",
+            "certifi==2024.2.2",
+            "charset-normalizer==3.3.2",
+            "idna==3.6"
+        )
+        
+        try {
+            # 检查是否有Python文件
+            $pyFiles = Get-ChildItem "py" -Filter "*.py" -Recurse
+            if ($pyFiles) {
+                Write-Host "Found Python files, generating requirements with pipreqs..."
+                
+                # 运行pipreqs并捕获输出
+                $pipreqsOutput = & pipreqs "./py" --force --encoding=utf8 --savepath="./py/new_requirements.txt" 2>&1
+                Write-Host "pipreqs output: $pipreqsOutput"
+                
+                if (Test-Path "./py/new_requirements.txt") {
+                    Write-Host "Successfully generated new_requirements.txt"
+                    $newReqs = Get-Content "./py/new_requirements.txt"
+                    
+                    # 合并新旧依赖
+                    if (Test-Path "./py/requirements.txt") {
+                        Write-Host "Merging with existing requirements.txt"
+                        $existingReqs = Get-Content "./py/requirements.txt"
+                        $allReqs = $existingReqs + $newReqs + $baseRequirements
+                    } else {
+                        Write-Host "No existing requirements.txt found"
+                        $allReqs = $newReqs + $baseRequirements
+                    }
+                    
+                    # 去重并排序
+                    $allReqs = $allReqs | Select-Object -Unique | Sort-Object
+                    
+                    # 保存结果
+                    $allReqs | Set-Content "./py/requirements.txt"
+                    Remove-Item "./py/new_requirements.txt" -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "pipreqs didn't generate new_requirements.txt, using base requirements"
+                    $baseRequirements | Set-Content "./py/requirements.txt"
+                }
+            } else {
+                Write-Host "No Python files found, using base requirements"
+                $baseRequirements | Set-Content "./py/requirements.txt"
+            }
+            
+            # 验证最终的requirements.txt
+            if (Test-Path "./py/requirements.txt") {
+                Write-Host "Final requirements.txt content:"
+                Get-Content "./py/requirements.txt"
+            } else {
+                throw "Failed to create requirements.txt"
+            }
+        }
+        catch {
+            Write-Host "Error occurred: $_"
+            Write-Host "Using base requirements as fallback"
+            $baseRequirements | Set-Content "./py/requirements.txt"
         }
       shell: pwsh
 
     - name: Install project dependencies
       run: |
+        Write-Host "Installing dependencies from requirements.txt..."
         if (Test-Path "py/requirements.txt") {
-          Write-Host "Installing dependencies from requirements.txt..."
-          pip install -r py/requirements.txt --upgrade
-          pip freeze
+            # 逐个安装依赖，以便在单个包安装失败时继续
+            Get-Content "py/requirements.txt" | ForEach-Object {
+                $package = $_.Trim()
+                if ($package -ne "") {
+                    Write-Host "Installing $package..."
+                    pip install $package --upgrade
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Failed to install $package"
+                    }
+                }
+            }
+            
+            Write-Host "Installed packages:"
+            pip freeze
         } else {
-          Write-Host "No requirements.txt file found, skipping dependency installation."
+            Write-Error "requirements.txt not found!"
+            exit 1
         }
       shell: pwsh
-
     - name: Setup build environment
       run: |
         # Create necessary directories
