@@ -38,7 +38,6 @@ jobs:
 
     - name: Check dependencies in code and requirements.txt
       run: |
-        # 检查代码中的依赖库
         Write-Host "Checking libraries used in the code..."
         $codeDependencies = pipreqs py --print
         Write-Host "Dependencies found in the code:"
@@ -75,7 +74,7 @@ jobs:
             try {
               pip install $dependency --upgrade
             } catch {
-              Write-Host "Failed to install $dependency"
+              Write-Host "Failed to install $dependency: $_"
               exit 1
             }
           }
