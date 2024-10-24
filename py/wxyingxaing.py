@@ -10,7 +10,7 @@ import queue
 import audioop
 import random
 import string
-import jwt   
+import jwt  # 用于生成加密链接
 from flask import Flask, Response, request
 import io
 import base64
@@ -44,7 +44,7 @@ class AudioStreamer:
         return token
 
     def get_ip(self):
-        """获取本机IP地址 """
+        """获取本机IP地址"""
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(('8.8.8.8', 80))
