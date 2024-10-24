@@ -98,7 +98,21 @@ jobs:
     - name: Generate or update requirements.txt
       run: |
         Write-Host "Updating requirements.txt..."
-        pipreqs py --force --output py/requirements.txt
+        
+        # 确保 py 目录存在并且包含 Python 文件
+        if (-not (Test-Path "py") -or -not (Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue)) {
+          Write-Error "No Python files found in 'py' directory."
+          exit 1
+        }
+
+        # 生成或更新 requirements.txt 文件
+        try {
+          pipreqs py --force --output py/requirements.txt
+          Write-Host "Generated/Updated requirements.txt successfully."
+        } catch {
+          Write-Error "Error while generating requirements.txt: $_"
+          exit 1
+        }
 
         # 输出生成的 requirements.txt 的内容
         if (Test-Path "py/requirements.txt") {
@@ -107,6 +121,21 @@ jobs:
         } else {
           Write-Error "Failed to generate or update requirements.txt"
           exit 1
+        }
+      shell: pwsh
+
+    - name: Commit requirements.txt
+      run: |
+        # 提交更新后的 requirements.txt
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+
+        if (Test-Path "py/requirements.txt") {
+          git add py/requirements.txt
+          git commit -m "Update requirements.txt [skip ci]"
+          git push
+        } else {
+          Write-Host "No requirements.txt found to commit."
         }
       shell: pwsh
 
