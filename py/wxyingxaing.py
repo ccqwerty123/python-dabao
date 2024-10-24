@@ -1,4 +1,4 @@
-import tkinter as tk
+import tkinter as tk 
 from tkinter import ttk, messagebox
 import qrcode
 from PIL import Image, ImageTk
@@ -10,13 +10,14 @@ import queue
 import audioop
 import random
 import string
-import jwt  # 用于生成加密链接
+import jwt
 from flask import Flask, Response, request
 import io
 import base64
 from functools import partial
 import time
 from datetime import datetime, timedelta
+import sounddevice as sd
 
 class AudioStreamer:
     def __init__(self):
@@ -26,6 +27,13 @@ class AudioStreamer:
         self.password = self.generate_password()
         self.secret_key = self.generate_password(16)  # JWT密钥
         self.max_clients = 1  # 默认最大连接数
+        self.virtual_device = None
+        self.quality_settings = {
+            '低质量': {'samplerate': 22050, 'channels': 1},
+            '中等质量': {'samplerate': 44100, 'channels': 2},
+            '高质量': {'samplerate': 48000, 'channels': 2}
+        }
+        self.current_quality = '中等质量'
         self.setup_routes()
         self.setup_gui()
 
@@ -57,7 +65,7 @@ class AudioStreamer:
         """设置图形界面"""
         self.root = tk.Tk()
         self.root.title("音频流服务器")
-        self.root.geometry("500x800")  # 增加窗口高度以适应新控件
+        self.root.geometry("500x850")
 
         # 样式设置
         style = ttk.Style()
@@ -68,23 +76,35 @@ class AudioStreamer:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 添加设备选择框架
-        device_frame = ttk.LabelFrame(main_frame, text="音频设备", padding="5")
+        # 音质选择frame
+        quality_frame = ttk.LabelFrame(main_frame, text="音频质量设置", padding="5")
+        quality_frame.pack(fill=tk.X, pady=5)
+        
+        self.quality_var = tk.StringVar(value=self.current_quality)
+        for quality in self.quality_settings.keys():
+            ttk.Radiobutton(
+                quality_frame,
+                text=quality,
+                variable=self.quality_var,
+                value=quality,
+                command=self.update_quality
+            ).pack(side=tk.LEFT, padx=5)
+
+        # 虚拟设备控制frame
+        device_frame = ttk.LabelFrame(main_frame, text="虚拟设备控制", padding="5")
         device_frame.pack(fill=tk.X, pady=5)
         
-        # 获取音频设备列表
-        self.speakers = sc.all_speakers()
-        device_names = [sp.name for sp in self.speakers]
+        ttk.Button(
+            device_frame,
+            text="创建虚拟设备",
+            command=self.create_virtual_device
+        ).pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(device_frame, text="选择录制设备：").pack(side=tk.LEFT)
-        self.device_var = tk.StringVar()
-        self.device_combo = ttk.Combobox(device_frame, textvariable=self.device_var, values=device_names)
-        self.device_combo.pack(side=tk.LEFT, padx=5)
-        if device_names:
-            self.device_combo.set(device_names[0])
-        
-        # 添加测试按钮
-        ttk.Button(device_frame, text="测试设备", command=self.test_audio_device).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            device_frame,
+            text="移除虚拟设备",
+            command=self.remove_virtual_device
+        ).pack(side=tk.LEFT, padx=5)
 
         # 用户限制设置
         limit_frame = ttk.LabelFrame(main_frame, text="用户限制", padding="5")
@@ -123,7 +143,7 @@ class AudioStreamer:
         ttk.Label(pwd_info_frame, text="访问密码：").pack(side=tk.LEFT)
         ttk.Entry(pwd_info_frame, textvariable=self.pwd_var, state='readonly', width=10).pack(side=tk.LEFT)
         ttk.Button(pwd_info_frame, text="复制密码", command=lambda: self.copy_text(self.pwd_var.get())).pack(side=tk.LEFT, padx=5)
-        ttk.Button(pwd_info_frame, text="刷新密码", command=self.refresh_password).pack(side=tk.LEFT)
+        ttk.Button(pwd_info_frame, text="更新密码", command=self.update_password).pack(side=tk.LEFT)
 
         # 二维码标签页
         notebook = ttk.Notebook(main_frame)
@@ -154,8 +174,12 @@ class AudioStreamer:
         self.conn_list.heading('time', text='连接时间')
         self.conn_list.pack(fill=tk.X, pady=5)
         
-        # 断开按钮
-        ttk.Button(info_frame, text="断开选中连接", command=self.disconnect_selected).pack()
+        # 断开按钮框架
+        disconnect_frame = ttk.Frame(info_frame)
+        disconnect_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(disconnect_frame, text="断开选中连接", command=self.disconnect_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(disconnect_frame, text="断开所有连接", command=self.disconnect_all).pack(side=tk.LEFT)
 
         # 状态栏
         self.status_var = tk.StringVar(value="服务器状态：准备就绪")
@@ -167,29 +191,81 @@ class AudioStreamer:
         # 初始化URL和二维码
         self.update_urls()
 
-    def test_audio_device(self):
-        """测试选中的音频设备"""
-        selected_device = self.device_var.get()
-        for speaker in self.speakers:
-            if speaker.name == selected_device:
-                try:
-                    with speaker.recorder(samplerate=44100, channels=2, blocksize=1024) as mic:
-                        data = mic.record(numframes=1024)
-                        if data.any():
-                            messagebox.showinfo("测试结果", "设备工作正常！检测到音频信号。")
-                        else:
-                            messagebox.showwarning("测试结果", "未检测到音频信号，请检查设备是否正在播放音频。")
-                except Exception as e:
-                    messagebox.showerror("错误", f"设备测试失败：{str(e)}")
-                return
+    def update_quality(self):
+        """更新音频质量设置"""
+        self.current_quality = self.quality_var.get()
+        if self.virtual_device:
+            # 重新创建虚拟设备以应用新的音质设置
+            self.remove_virtual_device()
+            self.create_virtual_device()
+        self.status_var.set(f"状态：音质已更新为 {self.current_quality}")
+
+    def create_virtual_device(self):
+        """创建虚拟音频设备"""
+        try:
+            if self.virtual_device is None:
+                quality = self.quality_settings[self.current_quality]
+                self.virtual_device = True  # 实际使用时替换为真实的虚拟设备创建代码
+                self.status_var.set("状态：虚拟音频设备创建成功")
+        except Exception as e:
+            messagebox.showerror("错误", f"创建虚拟设备失败: {str(e)}")
+
+    def remove_virtual_device(self):
+        """移除虚拟音频设备"""
+        try:
+            if self.virtual_device:
+                self.virtual_device = None
+                self.status_var.set("状态：虚拟音频设备已移除")
+        except Exception as e:
+            messagebox.showerror("错误", f"移除虚拟设备失败: {str(e)}")
+
+    def update_password(self):
+        """更新访问密码并断开所有连接"""
+        if messagebox.askyesno("确认", "更新密码将断开所有当前连接，是否继续？"):
+            self.password = self.generate_password()
+            self.pwd_var.set(self.password)
+            self.disconnect_all()
+            self.update_urls()
+            self.status_var.set("状态：密码已更新，所有连接已断开")
+
+    def disconnect_all(self):
+        """断开所有连接"""
+        self.connected_clients.clear()
+        for item in self.conn_list.get_children():
+            self.conn_list.delete(item)
+        self.update_connected_count()
+        self.status_var.set("状态：所有连接已断开")
 
     def update_max_clients(self):
         """更新最大连接数"""
         try:
-            self.max_clients = int(self.max_clients_var.get())
+            new_max = int(self.max_clients_var.get())
+            if new_max < len(self.connected_clients):
+                if messagebox.askyesno("警告", "降低最大连接数将断开部分现有连接，是否继续？"):
+                    self.disconnect_excess_clients(new_max)
+                else:
+                    self.max_clients_var.set(str(self.max_clients))
+                    return
+            self.max_clients = new_max
             self.status_var.set(f"状态：最大连接数已更新为 {self.max_clients}")
         except ValueError:
             self.max_clients_var.set(str(self.max_clients))
+
+    def disconnect_excess_clients(self, new_max):
+        """断开超出新限制的连接"""
+        excess = len(self.connected_clients) - new_max
+        if excess <= 0:
+            return
+            
+        clients = list(self.connected_clients.items())
+        clients.sort(key=lambda x: x[1])  # 按连接时间排序
+        
+        # 断开最早连接的客户端
+        for i in range(excess):
+            client_ip = clients[i][0]
+            del self.connected_clients[client_ip]
+            
+        self.update_client_list()
 
     def disconnect_selected(self):
         """断开选中的连接"""
@@ -210,13 +286,6 @@ class AudioStreamer:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.status_var.set("状态：已复制到剪贴板")
-
-    def refresh_password(self):
-        """刷新密码"""
-        self.password = self.generate_password()
-        self.pwd_var.set(self.password)
-        self.update_urls()
-        self.status_var.set("状态：密码已更新")
 
     def update_urls(self):
         """更新所有URL和二维码"""
@@ -306,39 +375,14 @@ class AudioStreamer:
                 <style>
                     body { text-align: center; font-family: Arial; }
                     .player { margin: 20px; }
-                    .controls { margin: 10px; }
                 </style>
-                <script>
-                    function initAudio() {
-                        var audio = document.querySelector('audio');
-                        audio.volume = 1.0;
-                        
-                        // 自动重连机制
-                        audio.addEventListener('error', function(e) {
-                            setTimeout(function() {
-                                audio.load();
-                                audio.play();
-                            }, 1000);
-                        });
-                    }
-                    
-                    function updateVolume(value) {
-                        var audio = document.querySelector('audio');
-                        audio.volume = value / 100;
-                    }
-                </script>
             </head>
-            <body onload="initAudio()">
+            <body>
                 <h1>音频流播放器</h1>
                 <div class="player">
                     <audio controls autoplay>
                         <source src="/audio" type="audio/wav">
                     </audio>
-                    <div class="controls">
-                        <label>音量：</label>
-                        <input type="range" min="0" max="100" value="100" 
-                               oninput="updateVolume(this.value)">
-                    </div>
                 </div>
             </body>
         </html>
@@ -364,30 +408,24 @@ class AudioStreamer:
 
     def capture_audio(self):
         """捕获音频"""
-        while True:
-            selected_device = self.device_var.get()
-            current_speaker = None
-            
-            # 查找选中的设备
-            for speaker in self.speakers:
-                if speaker.name == selected_device:
-                    current_speaker = speaker
-                    break
-            
-            if not current_speaker:
-                time.sleep(1)
-                continue
-                
-            try:
-                with current_speaker.recorder(samplerate=44100, channels=2, blocksize=1024) as mic:
-                    while True:
-                        data = mic.record(numframes=1024)
-                        data = (data * 32767).astype(np.int16).tobytes()
-                        if not self.audio_queue.full():
-                            self.audio_queue.put(data)
-            except Exception as e:
-                print(f"录音错误：{str(e)}")
-                time.sleep(1)
+        try:
+            while True:
+                if self.virtual_device:
+                    quality = self.quality_settings[self.current_quality]
+                    with sd.InputStream(
+                        device=self.virtual_device.device_id if hasattr(self.virtual_device, 'device_id') else None,
+                        samplerate=quality['samplerate'],
+                        channels=quality['channels'],
+                        blocksize=1024
+                    ) as stream:
+                        while True:
+                            data, _ = stream.read(1024)
+                            data = (data * 32767).astype(np.int16).tobytes()
+                            if not self.audio_queue.full():
+                                self.audio_queue.put(data)
+                time.sleep(0.1)
+        except Exception as e:
+            self.status_var.set(f"状态：音频捕获错误 - {str(e)}")
 
     def run_flask(self):
         """运行Flask服务器"""
@@ -396,6 +434,7 @@ class AudioStreamer:
     def shutdown(self):
         """关闭服务器"""
         if messagebox.askyesno("确认", "确定要关闭服务器吗？"):
+            self.remove_virtual_device()
             self.root.quit()
 
     def run(self):
