@@ -36,26 +36,27 @@ jobs:
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
+    - name: Debug: Show current directory and files
+      run: |
+        Write-Host "Current Directory: $(Get-Location)"
+        Write-Host "Files in py directory:"
+        Get-ChildItem py
+      shell: pwsh
+
     - name: Generate new requirements.txt
       run: |
         Write-Host "Generating new requirements.txt..."
         
-        # 显示当前工作目录
-        Get-Location
-        
-        # 显示文件列表
-        Get-ChildItem py
-
-        # 尝试生成 new_requirements.txt
+        # Attempt to generate new_requirements.txt
         $result = pipreqs py --force --output py/new_requirements.txt 2>&1
         
-        # 打印 pipreqs 的输出
-        Write-Host $result
-        
-        # 检查生成的新 requirements.txt 是否存在
+        # Print output and error message from pipreqs
+        Write-Host "pipreqs output: $result"
+
+        # Check if new_requirements.txt was created
         if (Test-Path "py/new_requirements.txt") {
           Write-Host "Generated new requirements.txt successfully."
-          Get-Content py/new_requirements.txt  # 输出生成的 requirements.txt 内容
+          Get-Content py/new_requirements.txt  # Output the content of the generated requirements.txt
         } else {
           Write-Error "new_requirements.txt not found after generation."
           exit 1
@@ -66,18 +67,18 @@ jobs:
       run: |
         if (Test-Path "py/requirements.txt") {
           Write-Host "Merging existing requirements.txt with new requirements..."
-          # 读取现有的 requirements.txt
+          # Read the existing requirements.txt
           $existingRequirements = Get-Content py/requirements.txt
-          # 读取新生成的 requirements.txt
+          # Read the new requirements.txt
           $newRequirements = Get-Content py/new_requirements.txt
 
-          # 去重并合并
+          # Combine and deduplicate
           $mergedRequirements = ($existingRequirements + $newRequirements) | Select-Object -Unique
-          # 保存合并后的结果
+          # Save merged results
           $mergedRequirements | Set-Content py/requirements.txt
         } else {
           Write-Host "No existing requirements.txt found, using new one."
-          Move-Item py/new_requirements.txt py/requirements.txt -Force  # 如果没有现有文件，直接使用新文件
+          Move-Item py/new_requirements.txt py/requirements.txt -Force  # If no existing file, use new file
         }
       shell: pwsh
 
@@ -86,7 +87,7 @@ jobs:
         if (Test-Path "py/requirements.txt") {
           Write-Host "Installing dependencies from requirements.txt..."
           pip install -r py/requirements.txt --upgrade
-          pip freeze  # 输出已安装库的列表
+          pip freeze  # Output list of installed packages
         } else {
           Write-Host "No requirements.txt file found, skipping dependency installation."
         }
@@ -94,14 +95,14 @@ jobs:
 
     - name: Setup build environment
       run: |
-        # 创建必要的目录
+        # Create necessary directories
         $dirs = @("py", "exe/original", "exe/compressed", "build", "specs")
         foreach ($dir in $dirs) {
           New-Item -ItemType Directory -Force -Path $dir
           Write-Host "Created directory: $dir"
         }
 
-        # 下载并设置 UPX
+        # Download and set up UPX
         $upx_version = "4.2.1"
         $url = "https://github.com/upx/upx/releases/download/v${upx_version}/upx-${upx_version}-win64.zip"
         
@@ -121,9 +122,9 @@ jobs:
       run: |
         $ErrorActionPreference = 'Stop'
         
-        # 检查是否有Python文件
+        # Check for Python files
         $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue | 
-                  Where-Object { $_.BaseName -ne "runtime_hook" }  # 排除 runtime_hook.py
+                  Where-Object { $_.BaseName -ne "runtime_hook" }  # Exclude runtime_hook.py
                   
         if (-not $pyFiles) {
           Write-Host "No Python files found in py directory"
@@ -144,7 +145,7 @@ jobs:
             "py/$($pyFile.Name)"
           )
           
-          # 构建原始版本
+          # Build original version
           Write-Host "`nBuilding original version..."
           $orig_args = $common_args + @(
             "--distpath", "exe/original",
@@ -160,7 +161,7 @@ jobs:
             exit 1
           }
           
-          # 构建压缩版本
+          # Build compressed version
           Write-Host "`nBuilding compressed version..."
           $comp_args = $common_args + @(
             "--distpath", "exe/compressed",
@@ -177,7 +178,7 @@ jobs:
             exit 1
           }
           
-          # 验证构建结果
+          # Verify build results
           $origExe = "exe/original/$baseName.exe"
           $compExe = "exe/compressed/$baseName.exe"
           
@@ -186,7 +187,7 @@ jobs:
             exit 1
           }
           
-          # 输出大小对比
+          # Output size comparison
           $origSize = (Get-Item $origExe).Length/1MB
           $compSize = (Get-Item $compExe).Length/1MB
           $ratio = 100 - ($compSize/$origSize*100)
@@ -200,7 +201,7 @@ jobs:
 
     - name: Commit EXE files and updated requirements.txt
       run: |
-        # 检查是否有新的exe文件
+        # Check for new EXE files
         $hasChanges = $false
         
         foreach ($dir in @("original", "compressed")) {
@@ -211,7 +212,7 @@ jobs:
           }
         }
         
-        # 检查 requirements.txt 是否有更新
+        # Check if requirements.txt has updates
         if (Test-Path "py/requirements.txt") {
           $reqFileContent = Get-Content py/requirements.txt
           if ($reqFileContent) {
@@ -225,7 +226,7 @@ jobs:
           
           git add exe/original/*.exe
           git add exe/compressed/*.exe
-          git add py/requirements.txt  # 添加更新后的 requirements.txt
+          git add py/requirements.txt  # Add updated requirements.txt
           
           git commit -m "Update EXE files and requirements.txt [skip ci]"
           git push
