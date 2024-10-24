@@ -45,7 +45,7 @@ jobs:
         } else {
           Write-Host "No requirements.txt found, creating a new one..."
           # 生成 requirements.txt 文件
-          pipreqs py --force --output py/requirements.txt
+          pipreqs py --force --output py/requirements.txt || exit 1
         }
 
         # 确认生成的 requirements.txt 文件是否存在
