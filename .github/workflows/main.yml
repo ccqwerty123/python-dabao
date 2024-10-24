@@ -30,111 +30,46 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    - name: Install pipreqs and other tools
+    - name: Install base packages
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: Check dependencies in code and requirements.txt
+    - name: Generate new requirements.txt
       run: |
-        Write-Host "Checking libraries used in the code..."
-        $codeDependencies = pipreqs py --print
-        Write-Host "Dependencies found in the code:"
-        Write-Host $codeDependencies
+        Write-Host "Generating new requirements.txt..."
+        pipreqs py --force --output py/new_requirements.txt  # 生成新的 requirements.txt
+        Get-Content py/new_requirements.txt  # 输出生成的 requirements.txt 内容
+      shell: pwsh
 
-        # 检查 requirements.txt 是否存在
+    - name: Merge requirements.txt
+      run: |
         if (Test-Path "py/requirements.txt") {
-          Write-Host "requirements.txt found, comparing with code dependencies..."
-          $reqFileDependencies = Get-Content py/requirements.txt
-          
-          Write-Host "Existing requirements.txt dependencies:"
-          Write-Host $reqFileDependencies
+          Write-Host "Merging existing requirements.txt with new requirements..."
+          # 读取现有的 requirements.txt
+          $existingRequirements = Get-Content py/requirements.txt
+          # 读取新生成的 requirements.txt
+          $newRequirements = Get-Content py/new_requirements.txt
 
-          # 找出代码中新增的依赖项
-          $missingDependencies = Compare-Object -ReferenceObject $reqFileDependencies -DifferenceObject $codeDependencies | 
-                                  Where-Object { $_.SideIndicator -eq '=>' } | 
-                                  ForEach-Object { $_.InputObject }
-
-          if ($missingDependencies) {
-            Write-Host "New dependencies to install:"
-            Write-Host $missingDependencies
-          } else {
-            Write-Host "No new dependencies found."
-          }
+          # 去重并合并
+          $mergedRequirements = ($existingRequirements + $newRequirements) | Select-Object -Unique
+          # 保存合并后的结果
+          $mergedRequirements | Set-Content py/requirements.txt
         } else {
-          Write-Host "No requirements.txt found, all dependencies from code will be installed."
-          $missingDependencies = $codeDependencies
-        }
-
-        # 安装所有依赖
-        if ($missingDependencies) {
-          Write-Host "Installing missing dependencies..."
-          foreach ($dependency in $missingDependencies) {
-            try {
-              pip install $dependency --upgrade
-            } catch {
-              Write-Host "Failed to install $dependency: $_"
-              exit 1
-            }
-          }
-        } else {
-          Write-Host "No dependencies to install."
+          Write-Host "No existing requirements.txt found, using new one."
+          Move-Item py/new_requirements.txt py/requirements.txt -Force  # 如果没有现有文件，直接使用新文件
         }
       shell: pwsh
 
-    - name: Install dependencies from requirements.txt
+    - name: Install project dependencies
       run: |
         if (Test-Path "py/requirements.txt") {
           Write-Host "Installing dependencies from requirements.txt..."
           pip install -r py/requirements.txt --upgrade
           pip freeze  # 输出已安装库的列表
         } else {
-          Write-Host "No requirements.txt found, skipping this step."
-        }
-      shell: pwsh
-
-    - name: Generate or update requirements.txt
-      run: |
-        Write-Host "Updating requirements.txt..."
-        
-        # 确保 py 目录存在并且包含 Python 文件
-        if (-not (Test-Path "py") -or -not (Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue)) {
-          Write-Error "No Python files found in 'py' directory."
-          exit 1
-        }
-
-        # 生成或更新 requirements.txt 文件
-        try {
-          pipreqs py --force --output py/requirements.txt
-          Write-Host "Generated/Updated requirements.txt successfully."
-        } catch {
-          Write-Error "Error while generating requirements.txt: $_"
-          exit 1
-        }
-
-        # 输出生成的 requirements.txt 的内容
-        if (Test-Path "py/requirements.txt") {
-          Write-Host "Generated/Updated requirements.txt:"
-          Get-Content py/requirements.txt
-        } else {
-          Write-Error "Failed to generate or update requirements.txt"
-          exit 1
-        }
-      shell: pwsh
-
-    - name: Commit requirements.txt
-      run: |
-        # 提交更新后的 requirements.txt
-        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git config --local user.name "github-actions[bot]"
-
-        if (Test-Path "py/requirements.txt") {
-          git add py/requirements.txt
-          git commit -m "Update requirements.txt [skip ci]"
-          git push
-        } else {
-          Write-Host "No requirements.txt found to commit."
+          Write-Host "No requirements.txt file found, skipping dependency installation."
         }
       shell: pwsh
 
@@ -162,7 +97,7 @@ jobs:
           throw "Failed to install UPX"
         }
       shell: pwsh
-
+      
     - name: Build EXEs
       run: |
         $ErrorActionPreference = 'Stop'
@@ -244,7 +179,7 @@ jobs:
         }
       shell: pwsh
 
-    - name: Commit EXE files
+    - name: Commit EXE files and updated requirements.txt
       run: |
         # 检查是否有新的exe文件
         $hasChanges = $false
@@ -257,16 +192,25 @@ jobs:
           }
         }
         
+        # 检查 requirements.txt 是否有更新
+        if (Test-Path "py/requirements.txt") {
+          $reqFileContent = Get-Content py/requirements.txt
+          if ($reqFileContent) {
+            $hasChanges = $true
+          }
+        }
+        
         if ($hasChanges) {
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
           git add exe/original/*.exe
           git add exe/compressed/*.exe
+          git add py/requirements.txt  # 添加更新后的 requirements.txt
           
-          git commit -m "Update EXE files [skip ci]"
+          git commit -m "Update EXE files and requirements.txt [skip ci]"
           git push
         } else {
-          Write-Host "No new EXE files to commit"
+          Write-Host "No new EXE files or updated requirements.txt to commit"
         }
       shell: pwsh
