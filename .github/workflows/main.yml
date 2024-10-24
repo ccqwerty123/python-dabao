@@ -33,7 +33,22 @@ jobs:
     - name: Install base packages
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller==5.13.2 pywin32 pefile
+        pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
+      shell: pwsh
+
+    - name: Generate requirements.txt
+      run: |
+        # 生成 requirements.txt 文件
+        pipreqs py --force
+      shell: pwsh
+
+    - name: Install project dependencies
+      run: |
+        if (Test-Path "requirements.txt") {
+          pip install -r requirements.txt --upgrade
+        } else {
+          Write-Host "No requirements.txt file found, skipping dependency installation."
+        }
       shell: pwsh
 
     - name: Setup build environment
