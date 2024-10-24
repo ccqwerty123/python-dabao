@@ -49,8 +49,6 @@ jobs:
         
         # Attempt to generate new_requirements.txt
         $result = pipreqs py --force --output py/new_requirements.txt 2>&1
-        
-        # Print output and error message from pipreqs
         Write-Host "pipreqs output: $result"
 
         # Check if new_requirements.txt was created
@@ -108,8 +106,8 @@ jobs:
         
         Invoke-WebRequest -Uri $url -OutFile upx.zip
         Expand-Archive upx.zip -DestinationPath .
-        Move-Item upx-*/upx.exe . -Force
-        Remove-Item upx.zip, upx-* -Recurse -Force
+        Move-Item "upx-${upx_version}-win64/upx.exe" . -Force  # Ensure correct path to UPX executable
+        Remove-Item upx.zip, "upx-${upx_version}-win64" -Recurse -Force
         
         if (Test-Path "upx.exe") {
           Write-Host "UPX installed successfully"
@@ -153,7 +151,7 @@ jobs:
           )
           
           try {
-            & pyinstaller $orig_args
+            & pyinstaller @orig_args
             if (-not $?) { throw "PyInstaller failed" }
           }
           catch {
@@ -170,7 +168,7 @@ jobs:
           )
           
           try {
-            & pyinstaller $comp_args
+            & pyinstaller @comp_args
             if (-not $?) { throw "PyInstaller failed" }
           }
           catch {
