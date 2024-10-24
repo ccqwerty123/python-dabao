@@ -36,9 +36,17 @@ jobs:
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: Generate requirements.txt
+    - name: Check and generate requirements.txt
       run: |
-        # 生成 requirements.txt 文件，并将其放置在 py 目录中
+        # 检查是否存在 requirements.txt
+        if (Test-Path "py/requirements.txt") {
+          Write-Host "Found requirements.txt, updating dependencies..."
+          pip install -r py/requirements.txt --upgrade
+        } else {
+          Write-Host "No requirements.txt found, creating a new one..."
+        }
+
+        # 生成 requirements.txt 文件
         pipreqs py --force --output py/requirements.txt
         Get-Content py/requirements.txt  # 输出 requirements.txt 的内容，确认生成
       shell: pwsh
