@@ -30,22 +30,30 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    - name: Install base packages
+    - name: Install dependencies from requirements.txt
+      run: |
+        if (Test-Path "py/requirements.txt") {
+          Write-Host "Found requirements.txt, installing dependencies..."
+          pip install -r py/requirements.txt --upgrade
+        } else {
+          Write-Host "No requirements.txt found, skipping this step."
+        }
+      shell: pwsh
+
+    - name: Install additional build tools
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: Check and generate requirements.txt
+    - name: Generate or update requirements.txt
       run: |
-        # 检查是否存在 requirements.txt
-        if (Test-Path "py/requirements.txt") {
-          Write-Host "Found requirements.txt, updating dependencies..."
-          pip install -r py/requirements.txt --upgrade
-        } else {
-          Write-Host "No requirements.txt found, creating a new one..."
-          # 生成 requirements.txt 文件
+        # 生成或更新 requirements.txt 文件
+        if (Test-Path "py") {
+          Write-Host "Generating/Updating requirements.txt..."
           pipreqs py --force --output py/requirements.txt || exit 1
+        } else {
+          Write-Host "No py directory found, skipping requirements.txt generation."
         }
 
         # 确认生成的 requirements.txt 文件是否存在
@@ -57,13 +65,14 @@ jobs:
         }
       shell: pwsh
 
-    - name: Install project dependencies
+    - name: Install any missing dependencies
       run: |
         if (Test-Path "py/requirements.txt") {
+          Write-Host "Installing dependencies from updated requirements.txt..."
           pip install -r py/requirements.txt --upgrade
           pip freeze  # 输出已安装库的列表
         } else {
-          Write-Host "No requirements.txt file found, skipping dependency installation."
+          Write-Host "No requirements.txt found, skipping dependency installation."
         }
       shell: pwsh
 
