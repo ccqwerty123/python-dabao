@@ -149,4 +149,144 @@ jobs:
         }
       shell: pwsh
 
-    # [其余步骤保持不变...]
+    - name: Setup build environment
+      run: |
+        # Create necessary directories
+        $dirs = @("py", "exe/original", "exe/compressed", "build", "specs")
+        foreach ($dir in $dirs) {
+          New-Item -ItemType Directory -Force -Path $dir
+          Write-Host "Created directory: $dir"
+        }
+
+        # Download and set up UPX
+        $upx_version = "4.2.1"
+        $url = "https://github.com/upx/upx/releases/download/v${upx_version}/upx-${upx_version}-win64.zip"
+        
+        Invoke-WebRequest -Uri $url -OutFile upx.zip
+        Expand-Archive upx.zip -DestinationPath .
+        Move-Item "upx-${upx_version}-win64/upx.exe" . -Force
+        Remove-Item upx.zip, "upx-${upx_version}-win64" -Recurse -Force
+        
+        if (Test-Path "upx.exe") {
+          Write-Host "UPX installed successfully"
+        } else {
+          throw "Failed to install UPX"
+        }
+      shell: pwsh
+      
+    - name: Build EXEs
+      run: |
+        $ErrorActionPreference = 'Stop'
+        
+        # Check for Python files
+        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue | 
+                  Where-Object { $_.BaseName -ne "runtime_hook" }
+                  
+        if (-not $pyFiles) {
+          Write-Host "No Python files found in py directory"
+          exit 0
+        }
+        
+        foreach ($pyFile in $pyFiles) {
+          $baseName = $pyFile.BaseName
+          Write-Host "`nProcessing: $($pyFile.Name)"
+          
+          $common_args = @(
+            "--clean",
+            "--noconfirm",
+            "--onefile",
+            "--noconsole",
+            "--name", $baseName,
+            "--specpath", "specs",
+            "py/$($pyFile.Name)"
+          )
+          
+          # Build original version
+          Write-Host "`nBuilding original version..."
+          $orig_args = $common_args + @(
+            "--distpath", "exe/original",
+            "--workpath", "build/original"
+          )
+          
+          try {
+            & pyinstaller @orig_args
+            if (-not $?) { throw "PyInstaller failed" }
+          }
+          catch {
+            Write-Error "Failed to build original version: $_"
+            exit 1
+          }
+          
+          # Build compressed version
+          Write-Host "`nBuilding compressed version..."
+          $comp_args = $common_args + @(
+            "--distpath", "exe/compressed",
+            "--workpath", "build/compressed",
+            "--upx-dir", "."
+          )
+          
+          try {
+            & pyinstaller @comp_args
+            if (-not $?) { throw "PyInstaller failed" }
+          }
+          catch {
+            Write-Error "Failed to build compressed version: $_"
+            exit 1
+          }
+          
+          # Verify build results
+          $origExe = "exe/original/$baseName.exe"
+          $compExe = "exe/compressed/$baseName.exe"
+          
+          if (-not(Test-Path $origExe) -or -not(Test-Path $compExe)) {
+            Write-Error "Build verification failed: Missing EXE files"
+            exit 1
+          }
+          
+          # Output size comparison
+          $origSize = (Get-Item $origExe).Length / 1MB
+          $compSize = (Get-Item $compExe).Length / 1MB
+          $ratio = 100 - ($compSize / $origSize * 100)
+          
+          Write-Host "`nBuild Results for $baseName"
+          Write-Host "Original: $([math]::Round($origSize, 2)) MB"
+          Write-Host "Compressed: $([math]::Round($compSize, 2)) MB"
+          Write-Host "Compression: $([math]::Round($ratio, 1))%"
+        }
+      shell: pwsh
+
+    - name: Commit EXE files and updated requirements.txt
+      run: |
+        # Check for new EXE files
+        $hasChanges = $false
+        
+        foreach ($dir in @("original", "compressed")) {
+          $exeFiles = Get-ChildItem "exe/$dir/*.exe" -ErrorAction SilentlyContinue
+          if ($exeFiles) {
+            $hasChanges = $true
+            break
+          }
+        }
+        
+        # Check if requirements.txt has updates
+        if (Test-Path "py/requirements.txt") {
+          $reqFileContent = Get-Content py/requirements.txt
+          if ($reqFileContent) {
+            $hasChanges = $true
+          }
+        }
+        
+        if ($hasChanges) {
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add exe/original/*.exe
+          git add exe/compressed/*.exe
+          git add py/requirements.txt
+          
+          git commit -m "Update EXE files and requirements.txt [skip ci]"
+          git push
+        } else {
+          Write-Host "No new EXE files or updated requirements.txt to commit"
+        }
+      shell: pwsh
