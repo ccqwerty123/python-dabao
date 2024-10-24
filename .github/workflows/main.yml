@@ -36,110 +36,61 @@ jobs:
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: "Debug: Show current directory and files"
+    - name: 'Debug - Show current directory and files'
       run: |
         Write-Host "Current Directory: $(Get-Location)"
         Write-Host "Files in py directory:"
         Get-ChildItem py
       shell: pwsh
 
-    - name: Validate Python Files
+    - name: Generate new requirements.txt
       run: |
-        # Check if there are any Python files to process
-        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue
-        if (-not $pyFiles) {
-          Write-Host "No Python files found in py directory"
-          exit 0
-        }
-        Write-Host "Found Python files: $($pyFiles.Name -join ', ')"
-      shell: pwsh
-      
-    - name: Generate dependencies
-      run: |
-        Write-Host "Starting dependency management..."
+        Write-Host "Generating new requirements.txt..."
         
-        # Create an empty requirements.txt if it doesn't exist
-        if (-not (Test-Path "py/requirements.txt")) {
-          New-Item -Path "py/requirements.txt" -ItemType File -Force
-          Write-Host "Created empty requirements.txt"
-        }
-        
-        # Generate new requirements using pipreqs
-        Write-Host "Generating new requirements with pipreqs..."
-        pipreqs py --force --output py/new_requirements.txt
-        
-        if (-not (Test-Path "py/new_requirements.txt")) {
-          Write-Error "Failed to generate new_requirements.txt"
+        # Attempt to generate new_requirements.txt
+        $result = pipreqs py --force --output py/new_requirements.txt 2>&1
+        Write-Host "pipreqs output: $result"
+
+        # Check if new_requirements.txt was created
+        if (Test-Path "py/new_requirements.txt") {
+          Write-Host "Generated new requirements.txt successfully."
+          Get-Content py/new_requirements.txt
+        } else {
+          Write-Error "new_requirements.txt not found after generation."
           exit 1
         }
-        
-        # Read both requirement files
-        $existingReqs = @()
-        if ((Get-Item "py/requirements.txt").Length -gt 0) {
-          $existingReqs = Get-Content "py/requirements.txt" | 
-            Where-Object { $_ -match '\S' } |  # Filter out empty lines
-            ForEach-Object { $_.Trim() }
+      shell: pwsh
+
+    - name: Merge requirements.txt
+      run: |
+        if (Test-Path "py/requirements.txt") {
+          Write-Host "Merging existing requirements.txt with new requirements..."
+          # Read the existing requirements.txt
+          $existingRequirements = Get-Content py/requirements.txt
+          # Read the new requirements.txt
+          $newRequirements = Get-Content py/new_requirements.txt
+
+          # Combine and deduplicate
+          $mergedRequirements = ($existingRequirements + $newRequirements) | Select-Object -Unique
+          # Save merged results
+          $mergedRequirements | Set-Content py/requirements.txt
+        } else {
+          Write-Host "No existing requirements.txt found, using new one."
+          Move-Item py/new_requirements.txt py/requirements.txt -Force
         }
-        
-        $newReqs = Get-Content "py/new_requirements.txt" | 
-          Where-Object { $_ -match '\S' } |  # Filter out empty lines
-          ForEach-Object { $_.Trim() }
-        
-        # Add some common dependencies that might be needed but not detected
-        $additionalReqs = @(
-          "requests",
-          "urllib3",
-          "certifi",
-          "charset-normalizer",
-          "idna"
-        )
-        
-        # Combine all requirements
-        $allReqs = $existingReqs + $newReqs + $additionalReqs | 
-          Select-Object -Unique |
-          Where-Object { $_ -ne "" } |
-          Sort-Object
-        
-        # Save combined requirements
-        $allReqs | Set-Content "py/requirements.txt"
-        
-        Write-Host "Updated requirements.txt content:"
-        Get-Content "py/requirements.txt"
-        
-        # Clean up
-        Remove-Item "py/new_requirements.txt" -ErrorAction SilentlyContinue
       shell: pwsh
 
     - name: Install project dependencies
       run: |
-        Write-Host "Installing dependencies from requirements.txt..."
         if (Test-Path "py/requirements.txt") {
-          # First try to install all dependencies
-          $installResult = pip install -r py/requirements.txt --upgrade 2>&1
-          
-          # If there are any errors, try installing dependencies one by one
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Bulk installation failed, trying individual installations..."
-            Get-Content "py/requirements.txt" | ForEach-Object {
-              $pkg = $_.Trim()
-              if ($pkg -ne "") {
-                Write-Host "Installing $pkg..."
-                pip install $pkg --upgrade
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Failed to install $pkg"
-                }
-              }
-            }
-          }
-          
-          Write-Host "Installed packages:"
+          Write-Host "Installing dependencies from requirements.txt..."
+          pip install -r py/requirements.txt --upgrade
           pip freeze
         } else {
-          Write-Error "requirements.txt not found after generation!"
-          exit 1
+          Write-Host "No requirements.txt file found, skipping dependency installation."
         }
       shell: pwsh
-      
+
     - name: Setup build environment
       run: |
         # Create necessary directories
@@ -155,7 +106,7 @@ jobs:
         
         Invoke-WebRequest -Uri $url -OutFile upx.zip
         Expand-Archive upx.zip -DestinationPath .
-        Move-Item "upx-${upx_version}-win64/upx.exe" . -Force  # Ensure correct path to UPX executable
+        Move-Item "upx-${upx_version}-win64/upx.exe" . -Force
         Remove-Item upx.zip, "upx-${upx_version}-win64" -Recurse -Force
         
         if (Test-Path "upx.exe") {
@@ -171,7 +122,7 @@ jobs:
         
         # Check for Python files
         $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue | 
-                  Where-Object { $_.BaseName -ne "runtime_hook" }  # Exclude runtime_hook.py
+                  Where-Object { $_.BaseName -ne "runtime_hook" }
                   
         if (-not $pyFiles) {
           Write-Host "No Python files found in py directory"
@@ -273,7 +224,7 @@ jobs:
           
           git add exe/original/*.exe
           git add exe/compressed/*.exe
-          git add py/requirements.txt  # Add updated requirements.txt
+          git add py/requirements.txt
           
           git commit -m "Update EXE files and requirements.txt [skip ci]"
           git push
