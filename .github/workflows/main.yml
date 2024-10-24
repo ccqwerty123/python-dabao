@@ -39,8 +39,18 @@ jobs:
     - name: Generate new requirements.txt
       run: |
         Write-Host "Generating new requirements.txt..."
-        pipreqs py --force --output py/new_requirements.txt  # 生成新的 requirements.txt
-        Get-Content py/new_requirements.txt  # 输出生成的 requirements.txt 内容
+        pipreqs py --force --output py/new_requirements.txt || {
+          Write-Error "Failed to generate requirements.txt"
+          exit 1
+        }
+        # 检查生成的新 requirements.txt 是否存在
+        if (Test-Path "py/new_requirements.txt") {
+          Write-Host "Generated new requirements.txt successfully."
+          Get-Content py/new_requirements.txt  # 输出生成的 requirements.txt 内容
+        } else {
+          Write-Error "new_requirements.txt not found after generation."
+          exit 1
+        }
       shell: pwsh
 
     - name: Merge requirements.txt
