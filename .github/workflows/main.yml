@@ -38,14 +38,16 @@ jobs:
 
     - name: Generate requirements.txt
       run: |
-        # 生成 requirements.txt 文件
-        pipreqs py --force
+        # 生成 requirements.txt 文件，并将其放置在 py 目录中
+        pipreqs py --force --output py/requirements.txt
+        Get-Content py/requirements.txt  # 输出 requirements.txt 的内容，确认生成
       shell: pwsh
 
     - name: Install project dependencies
       run: |
-        if (Test-Path "requirements.txt") {
-          pip install -r requirements.txt --upgrade
+        if (Test-Path "py/requirements.txt") {
+          pip install -r py/requirements.txt --upgrade
+          pip freeze  # 输出已安装库的列表
         } else {
           Write-Host "No requirements.txt file found, skipping dependency installation."
         }
