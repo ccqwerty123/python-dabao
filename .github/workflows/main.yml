@@ -43,54 +43,103 @@ jobs:
         Get-ChildItem py
       shell: pwsh
 
-    - name: Generate new requirements.txt
+    - name: Validate Python Files
       run: |
-        Write-Host "Generating new requirements.txt..."
-        
-        # Attempt to generate new_requirements.txt
-        $result = pipreqs py --force --output py/new_requirements.txt 2>&1
-        Write-Host "pipreqs output: $result"
-
-        # Check if new_requirements.txt was created
-        if (Test-Path "py/new_requirements.txt") {
-          Write-Host "Generated new requirements.txt successfully."
-          Get-Content py/new_requirements.txt  # Output the content of the generated requirements.txt
-        } else {
-          Write-Error "new_requirements.txt not found after generation."
-          exit 1
+        # Check if there are any Python files to process
+        $pyFiles = Get-ChildItem "py/*.py" -ErrorAction SilentlyContinue
+        if (-not $pyFiles) {
+          Write-Host "No Python files found in py directory"
+          exit 0
         }
+        Write-Host "Found Python files: $($pyFiles.Name -join ', ')"
       shell: pwsh
 
-    - name: Merge requirements.txt
+    - name: Generate dependencies
       run: |
-        if (Test-Path "py/requirements.txt") {
-          Write-Host "Merging existing requirements.txt with new requirements..."
-          # Read the existing requirements.txt
-          $existingRequirements = Get-Content py/requirements.txt
-          # Read the new requirements.txt
-          $newRequirements = Get-Content py/new_requirements.txt
-
-          # Combine and deduplicate
-          $mergedRequirements = ($existingRequirements + $newRequirements) | Select-Object -Unique
-          # Save merged results
-          $mergedRequirements | Set-Content py/requirements.txt
-        } else {
-          Write-Host "No existing requirements.txt found, using new one."
-          Move-Item py/new_requirements.txt py/requirements.txt -Force  # If no existing file, use new file
+        Write-Host "Starting dependency management..."
+        
+        # Create an empty requirements.txt if it doesn't exist
+        if (-not (Test-Path "py/requirements.txt")) {
+          New-Item -Path "py/requirements.txt" -ItemType File -Force
+          Write-Host "Created empty requirements.txt"
         }
+        
+        # Generate new requirements using pipreqs
+        Write-Host "Generating new requirements with pipreqs..."
+        pipreqs py --force --output py/new_requirements.txt
+        
+        if (-not (Test-Path "py/new_requirements.txt")) {
+          Write-Error "Failed to generate new_requirements.txt"
+          exit 1
+        }
+        
+        # Read both requirement files
+        $existingReqs = @()
+        if ((Get-Item "py/requirements.txt").Length -gt 0) {
+          $existingReqs = Get-Content "py/requirements.txt" | 
+            Where-Object { $_ -match '\S' } |  # Filter out empty lines
+            ForEach-Object { $_.Trim() }
+        }
+        
+        $newReqs = Get-Content "py/new_requirements.txt" | 
+          Where-Object { $_ -match '\S' } |  # Filter out empty lines
+          ForEach-Object { $_.Trim() }
+        
+        # Add some common dependencies that might be needed but not detected
+        $additionalReqs = @(
+          "requests",
+          "urllib3",
+          "certifi",
+          "charset-normalizer",
+          "idna"
+        )
+        
+        # Combine all requirements
+        $allReqs = $existingReqs + $newReqs + $additionalReqs | 
+          Select-Object -Unique |
+          Where-Object { $_ -ne "" } |
+          Sort-Object
+        
+        # Save combined requirements
+        $allReqs | Set-Content "py/requirements.txt"
+        
+        Write-Host "Updated requirements.txt content:"
+        Get-Content "py/requirements.txt"
+        
+        # Clean up
+        Remove-Item "py/new_requirements.txt" -ErrorAction SilentlyContinue
       shell: pwsh
 
     - name: Install project dependencies
       run: |
+        Write-Host "Installing dependencies from requirements.txt..."
         if (Test-Path "py/requirements.txt") {
-          Write-Host "Installing dependencies from requirements.txt..."
-          pip install -r py/requirements.txt --upgrade
-          pip freeze  # Output list of installed packages
+          # First try to install all dependencies
+          $installResult = pip install -r py/requirements.txt --upgrade 2>&1
+          
+          # If there are any errors, try installing dependencies one by one
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Bulk installation failed, trying individual installations..."
+            Get-Content "py/requirements.txt" | ForEach-Object {
+              $pkg = $_.Trim()
+              if ($pkg -ne "") {
+                Write-Host "Installing $pkg..."
+                pip install $pkg --upgrade
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Failed to install $pkg"
+                }
+              }
+            }
+          }
+          
+          Write-Host "Installed packages:"
+          pip freeze
         } else {
-          Write-Host "No requirements.txt file found, skipping dependency installation."
+          Write-Error "requirements.txt not found after generation!"
+          exit 1
         }
       shell: pwsh
-
+      
     - name: Setup build environment
       run: |
         # Create necessary directories
