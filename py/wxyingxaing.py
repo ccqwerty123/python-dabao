@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import segno  # 使用 segno 生成二维码
+import qrcode  # 使用 qrcode 生成二维码
 from PIL import Image, ImageTk
 import socket
 import threading
@@ -16,7 +16,6 @@ import io
 import base64
 from functools import partial
 from datetime import datetime, timedelta
-
 
 class AudioStreamer:
     def __init__(self):
@@ -203,9 +202,8 @@ class AudioStreamer:
 
     def update_qr_code(self, data, label):
         """更新指定的二维码"""
-        qr = segno.make(data)
-        qr_image = qr.to_image()
-        qr_image = qr_image.resize((200, 200), Image.LANCZOS)
+        qr = qrcode.make(data)
+        qr_image = qr.resize((200, 200), Image.LANCZOS)
         photo = ImageTk.PhotoImage(qr_image)
         label.configure(image=photo)
         label.image = photo
@@ -295,7 +293,6 @@ class AudioStreamer:
         """关闭服务器"""
         self.root.quit()
         self.status_var.set("状态：服务器已关闭")
-
 
 if __name__ == "__main__":
     streamer = AudioStreamer()
