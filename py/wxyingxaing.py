@@ -44,7 +44,7 @@ class AudioStreamer:
         return token
 
     def get_ip(self):
-        """获取本机IP地址"""
+        """获取本机IP地址 """
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(('8.8.8.8', 80))
