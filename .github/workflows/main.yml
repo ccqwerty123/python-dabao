@@ -30,49 +30,83 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
-    - name: Install dependencies from requirements.txt
-      run: |
-        if (Test-Path "py/requirements.txt") {
-          Write-Host "Found requirements.txt, installing dependencies..."
-          pip install -r py/requirements.txt --upgrade
-        } else {
-          Write-Host "No requirements.txt found, skipping this step."
-        }
-      shell: pwsh
-
-    - name: Install additional build tools
+    - name: Install pipreqs and other tools
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: Generate or update requirements.txt
+    - name: Check dependencies in code and requirements.txt
       run: |
-        # 生成或更新 requirements.txt 文件
-        if (Test-Path "py") {
-          Write-Host "Generating/Updating requirements.txt..."
-          pipreqs py --force --output py/requirements.txt || exit 1
+        # 检查代码中的依赖库
+        Write-Host "Checking libraries used in the code..."
+        $codeDependencies = pipreqs py --print
+        Write-Host "Dependencies found in the code:"
+        Write-Host $codeDependencies
+
+        # 检查 requirements.txt 是否存在
+        if (Test-Path "py/requirements.txt") {
+          Write-Host "requirements.txt found, comparing with code dependencies..."
+          $reqFileDependencies = Get-Content py/requirements.txt
+          
+          Write-Host "Existing requirements.txt dependencies:"
+          Write-Host $reqFileDependencies
+
+          # 找出代码中新增的依赖项
+          $missingDependencies = Compare-Object -ReferenceObject $reqFileDependencies -DifferenceObject $codeDependencies | 
+                                  Where-Object { $_.SideIndicator -eq '=>' } | 
+                                  ForEach-Object { $_.InputObject }
+
+          if ($missingDependencies) {
+            Write-Host "New dependencies to install:"
+            Write-Host $missingDependencies
+          } else {
+            Write-Host "No new dependencies found."
+          }
         } else {
-          Write-Host "No py directory found, skipping requirements.txt generation."
+          Write-Host "No requirements.txt found, all dependencies from code will be installed."
+          $missingDependencies = $codeDependencies
         }
 
-        # 确认生成的 requirements.txt 文件是否存在
-        if (Test-Path "py/requirements.txt") {
-          Get-Content py/requirements.txt  # 输出 requirements.txt 的内容，确认生成
+        # 安装所有依赖
+        if ($missingDependencies) {
+          Write-Host "Installing missing dependencies..."
+          foreach ($dependency in $missingDependencies) {
+            try {
+              pip install $dependency --upgrade
+            } catch {
+              Write-Host "Failed to install $dependency"
+              exit 1
+            }
+          }
         } else {
-          Write-Error "Failed to generate requirements.txt"
-          exit 1
+          Write-Host "No dependencies to install."
         }
       shell: pwsh
 
-    - name: Install any missing dependencies
+    - name: Install dependencies from requirements.txt
       run: |
         if (Test-Path "py/requirements.txt") {
-          Write-Host "Installing dependencies from updated requirements.txt..."
+          Write-Host "Installing dependencies from requirements.txt..."
           pip install -r py/requirements.txt --upgrade
           pip freeze  # 输出已安装库的列表
         } else {
-          Write-Host "No requirements.txt found, skipping dependency installation."
+          Write-Host "No requirements.txt found, skipping this step."
+        }
+      shell: pwsh
+
+    - name: Generate or update requirements.txt
+      run: |
+        Write-Host "Updating requirements.txt..."
+        pipreqs py --force --output py/requirements.txt
+
+        # 输出生成的 requirements.txt 的内容
+        if (Test-Path "py/requirements.txt") {
+          Write-Host "Generated/Updated requirements.txt:"
+          Get-Content py/requirements.txt
+        } else {
+          Write-Error "Failed to generate or update requirements.txt"
+          exit 1
         }
       shell: pwsh
 
@@ -100,7 +134,7 @@ jobs:
           throw "Failed to install UPX"
         }
       shell: pwsh
-      
+
     - name: Build EXEs
       run: |
         $ErrorActionPreference = 'Stop'
