@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import qrcode  # 使用 qrcode 生成二维码
 from PIL import Image, ImageTk
 import socket
 import threading
@@ -12,10 +11,10 @@ import random
 import string
 import jwt  # 用于生成加密链接
 from flask import Flask, Response, request
-import io
-import base64
+import requests  # 用于网络请求生成二维码
 from functools import partial
 from datetime import datetime, timedelta
+from io import BytesIO
 
 class AudioStreamer:
     def __init__(self):
@@ -201,40 +200,58 @@ class AudioStreamer:
         self.update_qr_code(pwd_url, self.pwd_qr_label)
 
     def update_qr_code(self, data, label):
-        """更新指定的二维码"""
-        qr = qrcode.make(data)
-        qr_image = qr.resize((200, 200), Image.LANCZOS)
-        photo = ImageTk.PhotoImage(qr_image)
-        label.configure(image=photo)
-        label.image = photo
+        """尝试通过多个在线API生成二维码"""
+        qr_image = self.get_qr_from_api(data)
+        if qr_image:
+            photo = ImageTk.PhotoImage(qr_image)
+            label.configure(image=photo)
+            label.image = photo
+        else:
+            label.configure(image=None)
+            label.image = None
+
+    def get_qr_from_api(self, data):
+        """通过多个API尝试生成二维码"""
+        apis = [
+            f"https://api.qrserver.com/v1/create-qr-code/?data={data}&size=200x200",
+            f"https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl={data}",
+            f"https://api.qrdraw.com/v1/create-qr-code/?data={data}&size=200x200"
+        ]
+        for api in apis:
+            try:
+                response = requests.get(api)
+                if response.status_code == 200:
+                    return Image.open(BytesIO(response.content))
+            except Exception:
+                continue
+        return None
 
     def setup_routes(self):
         """设置Flask路由"""
-        @self.app.route('/direct/<token>')
-        def direct_access(token):
-            try:
-                data = jwt.decode(token, self.secret_key, algorithms=['HS256'])
-                if data['password'] != self.password:
-                    return '链接已过期', 403
-                return self.serve_audio_page()
-            except Exception as e:
-                print(f"Error decoding token: {e}")
-                return '无效的访问链接', 403
-
-        @self.app.route('/login')
-        def login_page():
+        @self.app.route('/login', methods=['GET', 'POST'])
+        def login():
+            if request.method == 'POST':
+                input_password = request.form.get('password')
+                if input_password == self.password:
+                    return self.serve_audio_page()
+                else:
+                    return '密码错误', 403
             return '''
-                <form action="/verify" method="post">
-                    <input type="password" name="password" placeholder="请输入访问密码">
-                    <input type="submit" value="登录">
+                <form method="post">
+                    <input type="password" name="password" placeholder="输入密码" required>
+                    <input type="submit" value="提交">
                 </form>
             '''
 
-        @self.app.route('/verify', methods=['POST'])
-        def verify():
-            if request.form.get('password') == self.password:
+        @self.app.route('/direct/<token>')
+        def direct(token):
+            try:
+                jwt.decode(token, self.secret_key, algorithms=['HS256'])
                 return self.serve_audio_page()
-            return '密码错误', 403
+            except jwt.ExpiredSignatureError:
+                return '链接已过期', 403
+            except jwt.InvalidTokenError:
+                return '无效的链接', 403
 
         @self.app.route('/audio')
         def audio():
@@ -243,7 +260,6 @@ class AudioStreamer:
             client_ip = request.remote_addr
             self.connected_clients[client_ip] = datetime.now()
             self.update_connected_count()
-
             return Response(self.stream_audio(), mimetype="audio/wav")
 
     def update_connected_count(self):
@@ -262,8 +278,6 @@ class AudioStreamer:
                 data = (data * 32767).astype(np.int16).tobytes()
                 if not self.audio_queue.full():
                     self.audio_queue.put(data)
-
-                # 从队列中获取数据并返回
                 if not self.audio_queue.empty():
                     yield self.audio_queue.get()
 
