@@ -44,11 +44,17 @@ jobs:
           pip install -r py/requirements.txt --upgrade
         } else {
           Write-Host "No requirements.txt found, creating a new one..."
+          # 生成 requirements.txt 文件
+          pipreqs py --force --output py/requirements.txt
         }
 
-        # 生成 requirements.txt 文件
-        pipreqs py --force --output py/requirements.txt
-        Get-Content py/requirements.txt  # 输出 requirements.txt 的内容，确认生成
+        # 确认生成的 requirements.txt 文件是否存在
+        if (Test-Path "py/requirements.txt") {
+          Get-Content py/requirements.txt  # 输出 requirements.txt 的内容，确认生成
+        } else {
+          Write-Error "Failed to generate requirements.txt"
+          exit 1
+        }
       shell: pwsh
 
     - name: Install project dependencies
