@@ -36,7 +36,7 @@ jobs:
         pip install pyinstaller==5.13.2 pywin32 pefile pipreqs
       shell: pwsh
 
-    - name: Debug: Show current directory and files
+    - name: "Debug: Show current directory and files"
       run: |
         Write-Host "Current Directory: $(Get-Location)"
         Write-Host "Files in py directory:"
@@ -53,7 +53,7 @@ jobs:
         }
         Write-Host "Found Python files: $($pyFiles.Name -join ', ')"
       shell: pwsh
-
+      
     - name: Generate dependencies
       run: |
         Write-Host "Starting dependency management..."
